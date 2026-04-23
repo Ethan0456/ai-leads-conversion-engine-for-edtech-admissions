@@ -2,6 +2,12 @@
 
 A working MVP of an AI-powered admissions & enrollment funnel with adaptive scoring, conversational AI, and a sales dashboard.
 
+## Live Demo
+
+Candidate Form: https://ethan0456--enrollment-agent-candidate.modal.run/
+
+Leads Dashboard: https://ethan0456--enrollment-agent-dashboard.modal.run/
+
 ## Architecture
 
 ```
