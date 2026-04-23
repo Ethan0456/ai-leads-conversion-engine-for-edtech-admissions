@@ -42,18 +42,6 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 }
 .hero p { color: #94a3b8; font-size: 1rem; }
 
-/* Score cards */
-.score-card {
-    background: rgba(255,255,255,0.05);
-    border: 1px solid rgba(255,255,255,0.1);
-    border-radius: 12px;
-    padding: 1rem 1.2rem;
-    text-align: center;
-    backdrop-filter: blur(10px);
-}
-.score-card .label { color: #94a3b8; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
-.score-card .value { color: #a78bfa; font-size: 1.8rem; font-weight: 700; }
-
 /* Chat bubbles */
 .chat-bubble-user {
     background: linear-gradient(135deg, #7c3aed, #4f46e5);
@@ -241,34 +229,6 @@ else:
     scores = st.session_state.scores
     status = scores.get("status", "engaged")
 
-    # --- Top status bar ---
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.markdown(f"""
-        <div class="score-card">
-            <div class="label">Profile Score</div>
-            <div class="value">{scores.get('profile_score', 0):.0f}</div>
-        </div>""", unsafe_allow_html=True)
-    with col2:
-        st.markdown(f"""
-        <div class="score-card">
-            <div class="label">Fit Score</div>
-            <div class="value">{scores.get('fit_score', 0):.0f}</div>
-        </div>""", unsafe_allow_html=True)
-    with col3:
-        st.markdown(f"""
-        <div class="score-card">
-            <div class="label">Chat Score</div>
-            <div class="value">{scores.get('conversation_score', 0):.0f}</div>
-        </div>""", unsafe_allow_html=True)
-    with col4:
-        st.markdown(f"""
-        <div class="score-card">
-            <div class="label">Priority</div>
-            <div class="value">{scores.get('priority_score', 0):.0f}</div>
-        </div>""", unsafe_allow_html=True)
-
-    st.markdown(f'<p style="color:#64748b; font-size:0.78rem; margin-top:0.3rem;">Candidate ID: <code style="color:#a78bfa">{cid}</code></p>', unsafe_allow_html=True)
     st.markdown('<hr class="section-divider">', unsafe_allow_html=True)
 
     # ── Sync messages from backend (runs on every rerun, any tab) ──────────
