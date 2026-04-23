@@ -24,6 +24,11 @@ PROGRAMS = [
     },
 ]
 
+# Slots are unlocked (and scoring frozen) once both conditions are met:
+SLOTS_UNLOCK_THRESHOLD  = 60   # minimum conversation_score
+SLOTS_UNLOCK_MIN_REPLIES = 2   # minimum user replies in conversation
+
+
 # ---------------------------------------------------------------------------
 # PROFILE SCORING
 # ---------------------------------------------------------------------------

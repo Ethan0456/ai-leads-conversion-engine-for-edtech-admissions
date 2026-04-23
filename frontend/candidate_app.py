@@ -1,11 +1,12 @@
 """
 Candidate Streamlit App — Lead form + Chat interface.
 """
+import os
 import streamlit as st
 import requests
 import time
 
-API = "http://localhost:8000"
+API = os.environ.get("BACKEND_URL", "http://localhost:8000").rstrip("/")
 
 st.set_page_config(
     page_title="Interview Kickstart — Admissions",
@@ -138,6 +139,8 @@ if "slots" not in st.session_state:
     st.session_state.slots = []
 if "booked" not in st.session_state:
     st.session_state.booked = None
+if "slots_unlocked" not in st.session_state:
+    st.session_state.slots_unlocked = False
 
 # ---------------------------------------------------------------------------
 # Hero header
@@ -240,19 +243,19 @@ else:
         if _sync.ok:
             _data = _sync.json()
             _server_msgs = _data.get("messages", [])
-            # Merge: accept server copy only when it has more messages
-            # (guards against clobbering an optimistic local append mid-send)
             if len(_server_msgs) > _prev_msg_count:
                 st.session_state.messages = _server_msgs
-            # Also keep scores in sync
             _c = _data.get("candidate", {})
             if _c:
                 st.session_state.scores.update({
                     "conversation_score": _c.get("conversation_score", st.session_state.scores.get("conversation_score", 0)),
                     "priority_score":     _c.get("priority_score",     st.session_state.scores.get("priority_score", 0)),
                 })
+                # Sync slots_unlocked from server
+                if _c.get("slots_unlocked", False):
+                    st.session_state.slots_unlocked = True
     except Exception:
-        pass  # gracefully degrade — show whatever we have locally
+        pass
 
     # --- Tabs ---
     tab_chat, tab_programs, tab_schedule = st.tabs(["💬 Chat", "📚 Programs", "📅 Schedule"])
@@ -318,6 +321,12 @@ else:
                         "priority_score": data.get("priority_score", 0),
                         "status": data.get("status", status),
                     })
+
+                    # Unlock slots if threshold just crossed
+                    if data.get("slots_unlocked"):
+                        st.session_state.slots_unlocked = True
+                        st.session_state.slots = []  # force fresh slot fetch
+
                     st.rerun()
                 except Exception as e:
                     st.error(f"Error: {e}")
@@ -348,17 +357,41 @@ else:
             st.success(f"✅ Your call is booked: **{st.session_state.booked}**")
             st.balloons()
             st.markdown("An advisor will contact you shortly. Check your email for confirmation.")
+
+        elif not st.session_state.slots_unlocked:
+            # ── LOCKED STATE ──
+            st.markdown("""
+            <div style="
+                text-align: center;
+                padding: 3rem 2rem;
+                background: rgba(255,255,255,0.03);
+                border: 1px dashed rgba(255,255,255,0.1);
+                border-radius: 16px;
+                margin-top: 1rem;
+            ">
+                <div style="font-size: 3rem; margin-bottom: 1rem;">🔒</div>
+                <h3 style="color: #94a3b8; font-weight: 600; margin-bottom: 0.5rem;">
+                    Scheduling Not Yet Available
+                </h3>
+                <p style="color: #64748b; font-size: 0.9rem; max-width: 380px; margin: 0 auto;">
+                    Chat with Alex a little more so we can understand your background and goals.
+                    Once we have enough information, your personalized meeting slots will appear here.
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+
         else:
+            # ── UNLOCKED STATE ──
             st.markdown("### 📅 Book a Call With an Advisor")
-            st.markdown("Based on your profile priority, here are your available slots:")
+            st.markdown("Your personalized slots are ready based on your profile:")
 
             if not st.session_state.slots:
-                with st.spinner("Loading slots..."):
+                with st.spinner("Loading your slots..."):
                     try:
                         resp = requests.get(f"{API}/schedule/slots/{cid}", timeout=10)
                         st.session_state.slots = resp.json().get("slots", [])
                     except Exception:
-                        st.session_state.slots = ["Monday, 28 Apr 2026 at 10:00 AM UTC", "Monday, 28 Apr 2026 at 3:00 PM UTC"]
+                        st.session_state.slots = []
 
             slots = st.session_state.slots
             if slots:
@@ -374,13 +407,14 @@ else:
                         except Exception as e:
                             st.error(f"Booking error: {e}")
             else:
-                st.info("No slots available. Please chat with Alex first.")
+                st.warning("Slots could not be loaded. Please try refreshing.")
 
     # --- Reset button
     st.markdown('<hr class="section-divider">', unsafe_allow_html=True)
     if st.button("🔄 Start Over (New Lead)", use_container_width=False):
-        for key in ["candidate_id", "messages", "scores", "programs", "slots", "booked"]:
-            st.session_state[key] = None if key != "messages" else []
+        for key in ["candidate_id", "messages", "scores", "programs", "slots", "booked", "slots_unlocked"]:
+            st.session_state[key] = None if key not in ["messages", "slots"] else []
+        st.session_state.slots_unlocked = False
         st.rerun()
 
     # ── Auto-poll: rerun every 4 s so new follow-ups / human messages appear ──

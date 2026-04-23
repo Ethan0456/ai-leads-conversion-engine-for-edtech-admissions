@@ -1,12 +1,13 @@
 """
 Sales Dashboard — Streamlit app for admissions team.
 """
+import os
 import streamlit as st
 import requests
 import pandas as pd
 import time
 
-API = "http://localhost:8000"
+API = os.environ.get("BACKEND_URL", "http://localhost:8000").rstrip("/")
 
 st.set_page_config(
     page_title="Enrollment Agent — Sales Dashboard",

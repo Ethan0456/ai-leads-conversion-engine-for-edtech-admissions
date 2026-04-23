@@ -22,6 +22,8 @@ from backend.scoring import (
     match_programs,
     get_schedule_slots,
     apply_decay,
+    SLOTS_UNLOCK_THRESHOLD,
+    SLOTS_UNLOCK_MIN_REPLIES,
 )
 from backend.llm import chat_with_llm, generate_copilot_summary
 
@@ -109,6 +111,8 @@ def create_lead(lead: LeadInput):
         "matched_programs": programs,
         "followup_count": 0,
         "booked_slot": None,
+        "slots_unlocked": False,   # True once agent has enough info
+        "scoring_frozen": False,   # True once slots unlock (no more score updates)
         "last_activity_at": datetime.utcnow().isoformat(),
         "created_at": datetime.utcnow().isoformat(),
     }
@@ -183,32 +187,57 @@ def chat(candidate_id: str, body: ChatInput):
     messages.append(user_msg)
 
     agent_reply = None
+    just_unlocked = False
 
     if body.role == "user":
-        # Update conversation score
         reply_count = sum(1 for m in messages if m["role"] == "user")
-        new_conv_score, rules = score_message(
-            body.message, reply_count, c.get("conversation_score", 0)
-        )
+        scoring_frozen = c.get("scoring_frozen", False)
 
-        # Detect status transitions
-        status = c.get("status", "new")
-        if status == "new":
-            status = "engaged"
-        if reply_count >= 2 and status == "engaged":
-            status = "qualified"
+        if not scoring_frozen:
+            # ── Score the message ──
+            new_conv_score, rules = score_message(
+                body.message, reply_count, c.get("conversation_score", 0)
+            )
 
-        # Update candidate
-        candidates_col().update_one(
-            {"candidate_id": candidate_id},
-            {"$set": {
+            # ── Status transitions ──
+            status = c.get("status", "new")
+            if status == "new":
+                status = "engaged"
+            if reply_count >= 2 and status == "engaged":
+                status = "qualified"
+
+            # ── Check unlock threshold ──
+            already_unlocked = c.get("slots_unlocked", False)
+            threshold_crossed = (
+                new_conv_score >= SLOTS_UNLOCK_THRESHOLD
+                and reply_count >= SLOTS_UNLOCK_MIN_REPLIES
+            )
+            just_unlocked = threshold_crossed and not already_unlocked
+
+            update_fields = {
                 "conversation_score": new_conv_score,
                 "status": status,
                 "last_activity_at": datetime.utcnow().isoformat(),
-            }},
-        )
+            }
+            if just_unlocked:
+                update_fields["slots_unlocked"] = True
+                update_fields["scoring_frozen"] = True
 
-        # Get fresh candidate for context
+            candidates_col().update_one(
+                {"candidate_id": candidate_id},
+                {"$set": update_fields},
+            )
+            log_event(candidate_id, "message_sent", {
+                "score_delta": new_conv_score - c.get("conversation_score", 0),
+                "rules": rules,
+                "just_unlocked": just_unlocked,
+            })
+        else:
+            # Scoring frozen — still log the message, no score changes
+            status = c.get("status", "qualified")
+            log_event(candidate_id, "message_sent", {"scoring_frozen": True})
+
+        # ── Generate agent reply ──
         c_fresh = candidates_col().find_one({"candidate_id": candidate_id})
         context = (
             f"Name: {c_fresh.get('name')}, "
@@ -216,7 +245,6 @@ def chat(candidate_id: str, body: ChatInput):
             f"Interest: {c_fresh.get('program_interest', '')}, "
             f"Education: {c_fresh.get('education', '')}"
         )
-
         agent_reply_text = chat_with_llm(messages, context)
         agent_msg = {
             "role": "agent",
@@ -226,7 +254,20 @@ def chat(candidate_id: str, body: ChatInput):
         messages.append(agent_msg)
         agent_reply = agent_reply_text
 
-        log_event(candidate_id, "message_sent", {"score_delta": new_conv_score - c.get("conversation_score", 0), "rules": rules})
+        # ── If we just unlocked slots, append a special announcement ──
+        if just_unlocked:
+            unlock_announcement = {
+                "role": "agent",
+                "text": (
+                    "🎉 **Great news!** I now have a solid understanding of your background and goals. "
+                    "I've unlocked your **personalized meeting slots** — head over to the "
+                    "📅 **Schedule** tab to pick a time that works for you! "
+                    "One of our senior advisors will walk you through everything in detail."
+                ),
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+            messages.append(unlock_announcement)
+            log_event(candidate_id, "slots_unlocked", {})
 
     else:
         # Human message from sales dashboard — just store
@@ -238,8 +279,10 @@ def chat(candidate_id: str, body: ChatInput):
         {"$set": {"messages": messages}},
     )
 
-    # Refresh priority
-    refresh_scores(candidate_id)
+    # Refresh priority (only when scoring not frozen)
+    c_check = candidates_col().find_one({"candidate_id": candidate_id})
+    if not c_check.get("scoring_frozen", False):
+        refresh_scores(candidate_id)
 
     c_updated = candidates_col().find_one({"candidate_id": candidate_id}, {"_id": 0})
 
@@ -249,6 +292,8 @@ def chat(candidate_id: str, body: ChatInput):
         "priority_score": c_updated.get("priority_score", 0),
         "interaction_level": c_updated.get("interaction_level", 0),
         "status": c_updated.get("status", "new"),
+        "slots_unlocked": c_updated.get("slots_unlocked", False),
+        "just_unlocked": just_unlocked,
     }
 
 
@@ -323,8 +368,10 @@ def followup(candidate_id: str, body: FollowUpInput):
     if count >= 3:
         return {"message": "Max follow-ups reached (3)", "followup_count": count}
 
-    # Apply decay and send follow-up message
-    decayed = apply_decay(c.get("conversation_score", 0))
+    # Respect scoring freeze — don't apply decay after slots are unlocked
+    scoring_frozen = c.get("scoring_frozen", False)
+    current_score = c.get("conversation_score", 0)
+    decayed = apply_decay(current_score) if not scoring_frozen else current_score
     msg_text = body.message or f"Hi {c.get('name', 'there')}! Just checking in — would you like to continue exploring our programs? We'd love to help you reach your goals. 🎯"
 
     conv = conversations_col().find_one({"candidate_id": candidate_id})
