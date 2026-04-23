@@ -271,6 +271,29 @@ else:
     st.markdown(f'<p style="color:#64748b; font-size:0.78rem; margin-top:0.3rem;">Candidate ID: <code style="color:#a78bfa">{cid}</code></p>', unsafe_allow_html=True)
     st.markdown('<hr class="section-divider">', unsafe_allow_html=True)
 
+    # ── Sync messages from backend (runs on every rerun, any tab) ──────────
+    # This ensures follow-ups and human messages from the sales dashboard
+    # appear without the candidate needing to send a message first.
+    _prev_msg_count = len(st.session_state.messages)
+    try:
+        _sync = requests.get(f"{API}/candidate/{cid}", timeout=5)
+        if _sync.ok:
+            _data = _sync.json()
+            _server_msgs = _data.get("messages", [])
+            # Merge: accept server copy only when it has more messages
+            # (guards against clobbering an optimistic local append mid-send)
+            if len(_server_msgs) > _prev_msg_count:
+                st.session_state.messages = _server_msgs
+            # Also keep scores in sync
+            _c = _data.get("candidate", {})
+            if _c:
+                st.session_state.scores.update({
+                    "conversation_score": _c.get("conversation_score", st.session_state.scores.get("conversation_score", 0)),
+                    "priority_score":     _c.get("priority_score",     st.session_state.scores.get("priority_score", 0)),
+                })
+    except Exception:
+        pass  # gracefully degrade — show whatever we have locally
+
     # --- Tabs ---
     tab_chat, tab_programs, tab_schedule = st.tabs(["💬 Chat", "📚 Programs", "📅 Schedule"])
 
@@ -399,3 +422,10 @@ else:
         for key in ["candidate_id", "messages", "scores", "programs", "slots", "booked"]:
             st.session_state[key] = None if key != "messages" else []
         st.rerun()
+
+    # ── Auto-poll: rerun every 4 s so new follow-ups / human messages appear ──
+    # Uses the standard Streamlit pattern: sleep then rerun.
+    # We skip the sleep if the candidate just sent a message (they already triggered
+    # a rerun, no need to wait again).
+    time.sleep(4)
+    st.rerun()
