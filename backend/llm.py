@@ -1,11 +1,14 @@
 """
 LLM integration: OpenAI with mock fallback.
+Supports custom base URL (Azure, Ollama, local proxies) and model name via .env.
 """
 import os
 import json
 from datetime import datetime
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY", "")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "").strip() or None  # None → SDK uses default
+MODEL_NAME      = os.getenv("MODEL_NAME", "gpt-4o-mini").strip()
 
 # ---------------------------------------------------------------------------
 # System prompt
@@ -36,10 +39,18 @@ def chat_with_llm(messages: list[dict], candidate_context: str = "") -> str:
     return _mock_response(messages, candidate_context)
 
 
+def _make_client():
+    """Build an OpenAI client, honouring OPENAI_BASE_URL when set."""
+    from openai import OpenAI
+    kwargs = {"api_key": OPENAI_API_KEY}
+    if OPENAI_BASE_URL:
+        kwargs["base_url"] = OPENAI_BASE_URL
+    return OpenAI(**kwargs)
+
+
 def _call_openai(messages: list[dict], candidate_context: str) -> str:
     try:
-        from openai import OpenAI
-        client = OpenAI(api_key=OPENAI_API_KEY)
+        client = _make_client()
 
         system = SYSTEM_PROMPT
         if candidate_context:
@@ -51,13 +62,13 @@ def _call_openai(messages: list[dict], candidate_context: str) -> str:
             formatted.append({"role": role, "content": m["text"]})
 
         resp = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=MODEL_NAME,
             messages=formatted,
             max_tokens=300,
             temperature=0.7,
         )
         return resp.choices[0].message.content.strip()
-    except Exception as e:
+    except Exception:
         return _mock_response(messages, candidate_context)
 
 
@@ -154,8 +165,7 @@ def generate_copilot_summary(candidate: dict, messages: list[dict]) -> str:
 
     if OPENAI_API_KEY:
         try:
-            from openai import OpenAI
-            client = OpenAI(api_key=OPENAI_API_KEY)
+            client = _make_client()
             prompt = f"""Generate a concise sales copilot brief for an admissions advisor about to call this candidate:
 
 Name: {name}
@@ -170,7 +180,7 @@ Include: candidate summary, intent signals, recommended program, likely objectio
 Keep it under 200 words, formatted with bullet points."""
 
             resp = client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=MODEL_NAME,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=400,
                 temperature=0.5,
